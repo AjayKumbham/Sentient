@@ -13,11 +13,14 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Callable, C
 import httpx
 from qwen_agent.tools.base import BaseTool, register_tool
 from openai import OpenAI, APIError
+import google.generativeai as genai
 
 from main.chat.prompts import STAGE_1_SYSTEM_PROMPT, STAGE_2_SYSTEM_PROMPT, VOICE_STAGE_1_SYSTEM_PROMPT, VOICE_STAGE_2_SYSTEM_PROMPT, LANGUAGE_CODE_MAPPING # noqa: E501
 from main.db import MongoManager
 from main.llm import run_agent, LLMProviderDownError
-from main.config import (INTEGRATIONS_CONFIG, ENVIRONMENT, OPENAI_API_KEY, OPENAI_API_BASE_URL, OPENAI_MODEL_NAME)
+from main.db import MongoManager
+from main.llm import run_agent, LLMProviderDownError
+from main.config import (INTEGRATIONS_CONFIG, ENVIRONMENT, OPENAI_API_KEY, OPENAI_API_BASE_URL, OPENAI_MODEL_NAME, LLM_PROVIDER, GEMINI_API_KEY)
 from json_extractor import JsonExtractor
 from workers.utils.text_utils import clean_llm_output, parse_assistant_response
 import re
@@ -75,9 +78,6 @@ async def _get_stage1_response(messages: List[Dict[str, Any]], connected_tools_m
     Uses the Stage 1 LLM to detect topic changes and select relevant tools for text chat.
     Returns a dictionary containing a 'topic_changed' boolean and a 'tools' list.
     """
-    if not OPENAI_API_KEY:
-        raise ValueError("No OpenAI API key configured for Stage 1.")
-
     formatted_messages = [
         {"role": "system", "content": STAGE_1_SYSTEM_PROMPT}
     ]
@@ -88,23 +88,41 @@ async def _get_stage1_response(messages: List[Dict[str, Any]], connected_tools_m
                 "content": msg["content"]
             })
 
-    client = OpenAI(base_url=OPENAI_API_BASE_URL, api_key=OPENAI_API_KEY)
-
     try:
-        logger.info(f"Stage 1: Attempting LLM call")
+        final_content_str = ""
+        
+        if LLM_PROVIDER == "GEMINI":
+            if not GEMINI_API_KEY:
+                raise ValueError("No GEMINI_API_KEY configured.")
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
+            
+            prompt = STAGE_1_SYSTEM_PROMPT + "\n\nConversation History:\n" + json.dumps(formatted_messages)
+            
+            logger.info(f"Stage 1: Attempting Gemini call")
+            response = await model.generate_content_async(prompt)
+            final_content_str = response.text
 
-        def sync_api_call():
-            return client.chat.completions.create(
-                model=OPENAI_MODEL_NAME,
-                messages=formatted_messages,
-            )
+        else:
+            # Default to OpenAI
+            if not OPENAI_API_KEY:
+                raise ValueError("No OpenAI API key configured for Stage 1.")
 
-        completion = await asyncio.to_thread(sync_api_call)
+            client = OpenAI(base_url=OPENAI_API_BASE_URL, api_key=OPENAI_API_KEY)
+            logger.info(f"Stage 1: Attempting LLM call (OpenAI/Compatible)")
 
-        if not completion.choices:
-            raise Exception("LLM response was successful but contained no choices.")
+            def sync_api_call():
+                return client.chat.completions.create(
+                    model=OPENAI_MODEL_NAME,
+                    messages=formatted_messages,
+                )
 
-        final_content_str = completion.choices[0].message.content
+            completion = await asyncio.to_thread(sync_api_call)
+
+            if not completion.choices:
+                raise Exception("LLM response was successful but contained no choices.")
+
+            final_content_str = completion.choices[0].message.content
 
         cleaned_output = clean_llm_output(final_content_str)
         stage1_result = JsonExtractor.extract_valid_json(cleaned_output)
@@ -128,9 +146,6 @@ async def _get_voice_stage1_response(messages: List[Dict[str, Any]], user_id: st
     """
     Uses a specialized Stage 1 LLM for voice to classify intent and select tools.
     """
-    if not OPENAI_API_KEY:
-        raise ValueError("No OpenAI API key configured for Voice Stage 1.")
-
     # Get the full language name from the mapping, default to English
     lang_code = detected_language.split('-')[0] if detected_language else 'en'
     full_language_name = LANGUAGE_CODE_MAPPING.get(lang_code, "English")
@@ -148,24 +163,44 @@ async def _get_voice_stage1_response(messages: List[Dict[str, Any]], user_id: st
                 "content": msg["content"]
             })
 
-    client = OpenAI(base_url=OPENAI_API_BASE_URL, api_key=OPENAI_API_KEY)
-
     try:
-        logger.info(f"Voice Stage 1: Attempting LLM call for user {user_id}")
+        final_content_str = ""
 
-        def sync_api_call():
-            return client.chat.completions.create(
-                model=OPENAI_MODEL_NAME,
-                messages=formatted_messages,
-                response_format={"type": "json_object"},
-            )
+        if LLM_PROVIDER == "GEMINI":
+            if not GEMINI_API_KEY:
+                raise ValueError("No GEMINI_API_KEY configured.")
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
+            
+            prompt = system_prompt + "\n\nConversation History:\n" + json.dumps(formatted_messages)
 
-        completion = await asyncio.to_thread(sync_api_call)
+            logger.info(f"Voice Stage 1: Attempting Gemini call for user {user_id}")
+            response = await model.generate_content_async(prompt)
+            final_content_str = response.text
 
-        if not completion.choices:
-            raise Exception("LLM response was successful but contained no choices.")
+        else:
+            # Default to OpenAI
+            if not OPENAI_API_KEY:
+                 raise ValueError("No OpenAI API key configured for Voice Stage 1.")
+            
+            client = OpenAI(base_url=OPENAI_API_BASE_URL, api_key=OPENAI_API_KEY)
 
-        final_content_str = completion.choices[0].message.content
+            logger.info(f"Voice Stage 1: Attempting LLM call for user {user_id}")
+
+            def sync_api_call():
+                return client.chat.completions.create(
+                    model=OPENAI_MODEL_NAME,
+                    messages=formatted_messages,
+                    response_format={"type": "json_object"},
+                )
+
+            completion = await asyncio.to_thread(sync_api_call)
+
+            if not completion.choices:
+                raise Exception("LLM response was successful but contained no choices.")
+
+            final_content_str = completion.choices[0].message.content
+        
         stage1_result = JsonExtractor.extract_valid_json(final_content_str)
 
         if isinstance(stage1_result, dict) and "query_type" in stage1_result:
@@ -174,6 +209,7 @@ async def _get_voice_stage1_response(messages: List[Dict[str, Any]], user_id: st
         else:
             logger.error(f"Voice Stage 1 LLM call for user {user_id} returned invalid JSON: {final_content_str}")
             return {"query_type": "conversational", "task_type": None, "response": "Sorry, I had trouble understanding that.", "summary_for_task": None, "tools": []}
+
     except Exception as e:
         logger.error(f"An unexpected error occurred during Voice Stage 1 call for user {user_id}: {e}", exc_info=True)
         return {"query_type": "conversational", "task_type": None, "response": "Sorry, I had trouble understanding that.", "summary_for_task": None, "tools": []}

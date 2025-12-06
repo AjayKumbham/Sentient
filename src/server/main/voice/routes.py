@@ -99,6 +99,7 @@ class MyVoiceChatHandler(ReplyOnPause):
             output_sample_rate=16000
         )
         self.handler_id = str(uuid.uuid4())[:8]
+        self.processing_lock = asyncio.Lock()
         logger.info(f"[Handler:{self.handler_id}] MyVoiceChatHandler instance created.")
 
     def copy(self):
@@ -112,107 +113,112 @@ class MyVoiceChatHandler(ReplyOnPause):
         Main callback for FastRTC. Handles STT, LLM, and TTS streaming.
         This function is a generator, yielding audio chunks back to the client.
         """
-        from main.app import stt_model_instance, tts_model_instance
-
-        context = get_current_context()
-        webrtc_id = context.webrtc_id
-        logger.info(f"[Handler:{self.handler_id}] Processing audio chunk for webrtc_id: {webrtc_id}")
-
-        # Authenticate the stream using the webrtc_id as the RTC token
-        rtc_token = webrtc_id
-        token_info = rtc_token_cache.get(rtc_token, None)
-
-        if not token_info or time.time() > token_info["expires_at"]:
-            logger.error(f"[Handler:{self.handler_id}] Invalid or expired RTC token received: {rtc_token}. Terminating stream.")
-            await self.send_message(json.dumps({"type": "error", "message": "Authentication failed. Please refresh."}))
+        if self.processing_lock.locked():
+            logger.info(f"[Handler:{self.handler_id}] Ignoring audio chunk - processing already in progress.")
             return
 
-        user_id = token_info["user_id"]
-        logger.info(f"[Handler:{self.handler_id}] WebRTC stream authenticated for user {user_id} via token {rtc_token}")
+        async with self.processing_lock:
+            from main.app import stt_model_instance, tts_model_instance
 
-        try:
-            # 1. Speech-to-Text (STT)
-            if not stt_model_instance:
-                raise Exception("STT model is not initialized.")
-            
-            await self.send_message(json.dumps({"type": "status", "message": "transcribing"}))
-            sample_rate, audio_array = audio
+            context = get_current_context()
+            webrtc_id = context.webrtc_id
+            logger.info(f"[Handler:{self.handler_id}] Processing audio chunk for webrtc_id: {webrtc_id}")
 
-            if audio_array.dtype != np.int16:
-                audio_array = (audio_array * 32767).astype(np.int16)
+            # Authenticate the stream using the webrtc_id as the RTC token
+            rtc_token = webrtc_id
+            token_info = rtc_token_cache.get(rtc_token, None)
 
-            logger.info(f"[Handler:{self.handler_id}] Transcribing audio for user {user_id}...")
-            transcription, detected_language = await stt_model_instance.transcribe(audio_array.tobytes(), sample_rate=sample_rate)
-            
-            if not transcription or not transcription.strip():
-                logger.info(f"[Handler:{self.handler_id}] STT returned empty string, skipping.")
-                await self.send_message(json.dumps({"type": "status", "message": "listening"}))
+            if not token_info or time.time() > token_info["expires_at"]:
+                logger.error(f"[Handler:{self.handler_id}] Invalid or expired RTC token received: {rtc_token}. Terminating stream.")
+                await self.send_message(json.dumps({"type": "error", "message": "Authentication failed. Please refresh."}))
                 return
 
-            logger.info(f"[Handler:{self.handler_id}] STT result for user {user_id}: '{transcription}' (Language: {detected_language})")
-            await self.send_message(json.dumps({"type": "stt_result", "text": transcription, "language": detected_language}))
+            user_id = token_info["user_id"]
+            logger.info(f"[Handler:{self.handler_id}] WebRTC stream authenticated for user {user_id} via token {rtc_token}")
 
-            async def send_status_update(status_update: Dict[str, Any]):
-                """Sends a status update message to the client."""
-                await self.send_message(json.dumps(status_update))
-
-            # 2. Process command, which may return a background task for Stage 2
-            response_data = await process_voice_command(
-                user_id=user_id,
-                transcribed_text=transcription,
-                detected_language=detected_language,
-                send_status_update=send_status_update,
-                db_manager=mongo_manager
-            )
-
-            interim_response = response_data.get("interim_response")
-            final_response_task = response_data.get("final_response_task")
-            final_response = response_data.get("final_response")
-            assistant_message_id = response_data.get("assistant_message_id")
-
-            # 3. Play interim TTS if available (runs in parallel with Stage 2)
-            if interim_response:
-                logger.info(f"[Handler:{self.handler_id}] TTS for interim response: '{interim_response}'")
-                interim_audio_stream = tts_model_instance.stream_tts(interim_response, language=detected_language)
-                async for audio_chunk in interim_audio_stream:
-                    yield self._format_audio_chunk(audio_chunk)
-
-            # 4. Wait for Stage 2 to finish (if it was started) and get final response
-            if final_response_task:
-                final_response_text, final_turn_steps = await final_response_task
-                await mongo_manager.messages_collection.update_one(
-                    {"message_id": assistant_message_id, "user_id": user_id},
-                    {"$set": {"content": final_response_text, "turn_steps": final_turn_steps}}
-                )
-                await self.send_message(json.dumps({"type": "llm_result", "text": final_response_text, "messageId": assistant_message_id}))
-                final_response = final_response_text
-            elif final_response:
-                await self.send_message(json.dumps({"type": "llm_result", "text": final_response, "messageId": assistant_message_id}))
-
-            # 5. Play final TTS (handles all cases: simple, complex, conversational)
-            if not final_response:
-                logger.warning(f"[Handler:{self.handler_id}] LLM returned an empty final response for user {user_id}.")
-                await self.send_message(json.dumps({"type": "status", "message": "listening"}))
-                return
-
-            await self.send_message(json.dumps({"type": "status", "message": "speaking"}))
-            sentences = re.split(r'(?<=[.?!])\s+', final_response)
-            sentences = [s.strip() for s in sentences if s.strip()]
-            for i, sentence in enumerate(sentences):
-                if not sentence: continue
-                audio_stream = tts_model_instance.stream_tts(sentence, language=detected_language)
-                async for audio_chunk in audio_stream:
-                    yield self._format_audio_chunk(audio_chunk)
-        except Exception as e:
-            logger.error(f"[Handler:{self.handler_id}] Error in voice_chat for user {user_id}: {e}", exc_info=True)
-            await self.send_message(json.dumps({"type": "error", "message": str(e)}))
-        finally:
-            # Use a try-except block for the final message to prevent crashing on disconnect
             try:
-                logger.info(f"[Handler:{self.handler_id}] Sending final 'listening' status for user {user_id}.")
-                await self.send_message(json.dumps({"type": "status", "message": "listening"}))
-            except Exception as final_e:
-                logger.warning(f"[Handler:{self.handler_id}] Could not send final 'listening' status for user {user_id}, connection likely closed: {final_e}")
+                # 1. Speech-to-Text (STT)
+                if not stt_model_instance:
+                    raise Exception("STT model is not initialized.")
+                
+                await self.send_message(json.dumps({"type": "status", "message": "transcribing"}))
+                sample_rate, audio_array = audio
+
+                if audio_array.dtype != np.int16:
+                    audio_array = (audio_array * 32767).astype(np.int16)
+
+                logger.info(f"[Handler:{self.handler_id}] Transcribing audio for user {user_id}...")
+                transcription, detected_language = await stt_model_instance.transcribe(audio_array.tobytes(), sample_rate=sample_rate)
+                
+                if not transcription or not transcription.strip():
+                    logger.info(f"[Handler:{self.handler_id}] STT returned empty string, skipping.")
+                    await self.send_message(json.dumps({"type": "status", "message": "listening"}))
+                    return
+
+                logger.info(f"[Handler:{self.handler_id}] STT result for user {user_id}: '{transcription}' (Language: {detected_language})")
+                await self.send_message(json.dumps({"type": "stt_result", "text": transcription, "language": detected_language}))
+
+                async def send_status_update(status_update: Dict[str, Any]):
+                    """Sends a status update message to the client."""
+                    await self.send_message(json.dumps(status_update))
+
+                # 2. Process command, which may return a background task for Stage 2
+                response_data = await process_voice_command(
+                    user_id=user_id,
+                    transcribed_text=transcription,
+                    detected_language=detected_language,
+                    send_status_update=send_status_update,
+                    db_manager=mongo_manager
+                )
+
+                interim_response = response_data.get("interim_response")
+                final_response_task = response_data.get("final_response_task")
+                final_response = response_data.get("final_response")
+                assistant_message_id = response_data.get("assistant_message_id")
+
+                # 3. Play interim TTS if available (runs in parallel with Stage 2)
+                if interim_response:
+                    logger.info(f"[Handler:{self.handler_id}] TTS for interim response: '{interim_response}'")
+                    interim_audio_stream = tts_model_instance.stream_tts(interim_response, language=detected_language)
+                    async for audio_chunk in interim_audio_stream:
+                        yield self._format_audio_chunk(audio_chunk)
+
+                # 4. Wait for Stage 2 to finish (if it was started) and get final response
+                if final_response_task:
+                    final_response_text, final_turn_steps = await final_response_task
+                    await mongo_manager.messages_collection.update_one(
+                        {"message_id": assistant_message_id, "user_id": user_id},
+                        {"$set": {"content": final_response_text, "turn_steps": final_turn_steps}}
+                    )
+                    await self.send_message(json.dumps({"type": "llm_result", "text": final_response_text, "messageId": assistant_message_id}))
+                    final_response = final_response_text
+                elif final_response:
+                    await self.send_message(json.dumps({"type": "llm_result", "text": final_response, "messageId": assistant_message_id}))
+
+                # 5. Play final TTS (handles all cases: simple, complex, conversational)
+                if not final_response:
+                    logger.warning(f"[Handler:{self.handler_id}] LLM returned an empty final response for user {user_id}.")
+                    await self.send_message(json.dumps({"type": "status", "message": "listening"}))
+                    return
+
+                await self.send_message(json.dumps({"type": "status", "message": "speaking"}))
+                sentences = re.split(r'(?<=[.?!])\s+', final_response)
+                sentences = [s.strip() for s in sentences if s.strip()]
+                for i, sentence in enumerate(sentences):
+                    if not sentence: continue
+                    audio_stream = tts_model_instance.stream_tts(sentence, language=detected_language)
+                    async for audio_chunk in audio_stream:
+                        yield self._format_audio_chunk(audio_chunk)
+            except Exception as e:
+                logger.error(f"[Handler:{self.handler_id}] Error in voice_chat for user {user_id}: {e}", exc_info=True)
+                await self.send_message(json.dumps({"type": "error", "message": str(e)}))
+            finally:
+                # Use a try-except block for the final message to prevent crashing on disconnect
+                try:
+                    logger.info(f"[Handler:{self.handler_id}] Sending final 'listening' status for user {user_id}.")
+                    await self.send_message(json.dumps({"type": "status", "message": "listening"}))
+                except Exception as final_e:
+                    logger.warning(f"[Handler:{self.handler_id}] Could not send final 'listening' status for user {user_id}, connection likely closed: {final_e}")
                 
     def _format_audio_chunk(self, audio_chunk: Any) -> Tuple[int, np.ndarray]:
         """Helper to format audio chunks from different TTS providers into the expected tuple."""

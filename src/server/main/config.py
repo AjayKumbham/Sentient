@@ -58,6 +58,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ollama")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "models/gemini-embedding-001")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "OPENAI")
 
 # --- Voice ---
 STT_PROVIDER = os.getenv("STT_PROVIDER", "DEEPGRAM")
