@@ -1,3 +1,9 @@
+> **📢 Note:** This is a fork of [Sentient](https://github.com/existence-master/Sentient) by Existence.  
+> Original project: https://github.com/existence-master/Sentient  
+> Licensed under GNU AGPL v3
+
+---
+
 <div align="center">
 
 ![README Banner](./.github/assets/banner.png)
