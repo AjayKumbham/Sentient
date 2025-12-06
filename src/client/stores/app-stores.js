@@ -50,10 +50,13 @@ export const useUserStore = create(
 
 					const userData = { ...data.data, ...profileData }
 
+					// Force Pro for self-hosted environment to enable Voice Mode
+					const isPro = true
+
 					set({
 						user: userData,
-						plan: userData.pricing || "free",
-						isPro: userData.pricing === "pro",
+						plan: "pro",
+						isPro: isPro,
 						onboardingComplete: userData.onboardingComplete,
 						isLoading: false
 					})

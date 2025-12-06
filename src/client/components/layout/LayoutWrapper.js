@@ -557,7 +557,16 @@ export default function LayoutWrapper({ children }) {
 		const isSelfHost = process.env.NEXT_PUBLIC_ENVIRONMENT === "selfhost"
 
 		if (isSelfHost) {
-			// In selfhost mode, allow access immediately
+			// In selfhost mode, allow access immediately and set Pro status
+			if (!storedUser) {
+				useUserStore.setState({
+					user: { name: "SelfHost User", email: "admin@localhost", picture: "" },
+					plan: "pro",
+					isPro: true,
+					onboardingComplete: true,
+					isLoading: false
+				})
+			}
 			setIsLoading(false)
 			setIsAllowed(true)
 			return
