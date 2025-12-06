@@ -43,7 +43,19 @@ function Update-EnvVariable {
 Update-EnvVariable "STT_PROVIDER" "FASTER_WHISPER"
 
 # Configure TTS Provider
-Update-EnvVariable "TTS_PROVIDER" "ORPHEUS"
+Write-Host ""
+Write-Host "TTS Configuration (The Mouth):" -ForegroundColor Yellow
+Write-Host "1. Edge TTS (Recommended)" -ForegroundColor Green
+Write-Host "   - Uses Microsoft Edge Online TTS. High quality, instant, requires internet."
+Write-Host "2. Orpheus (Local AI)" -ForegroundColor White
+Write-Host "   - Completely offline. Requires GPU for speed. Slow on CPU."
+
+$ttsChoice = Read-Host "Choose Provider (1-2, default: 1)"
+if ($ttsChoice -eq "2") {
+    Update-EnvVariable "TTS_PROVIDER" "ORPHEUS"
+} else {
+    Update-EnvVariable "TTS_PROVIDER" "EDGE_TTS"
+}
 
 # Ask about GPU availability
 Write-Host ""
@@ -91,7 +103,42 @@ Update-EnvVariable "FASTER_WHISPER_MODEL_SIZE" $modelSize
 # Configure Orpheus model path
 Update-EnvVariable "ORPHEUS_MODEL_PATH" "src/server/main/voice/models/orpheus-3b-0.1-ft-q4_k_m.gguf"
 
+# Configure LLM (The Brain)
 Write-Host ""
+Write-Host "LLM Configuration (The Brain):" -ForegroundColor Yellow
+Write-Host "Sentient needs an LLM to understand and reply."
+Write-Host "1. Gemini (Fast, Free Tier, Recommended)" -ForegroundColor Green
+Write-Host "2. Ollama (Local, Completely Free, Requires RAM)" -ForegroundColor White
+Write-Host "3. OpenAI (Paid API)" -ForegroundColor White
+
+$llmChoice = Read-Host "Choose Provider (1-3, default: 1)"
+
+if ($llmChoice -eq "2") {
+    # Ollama
+    Write-Host "Configuring for Ollama..." -ForegroundColor Cyan
+    Update-EnvVariable "LLM_PROVIDER" "OPENAI" # Uses OpenAI-compatible endpoint
+    Update-EnvVariable "OPENAI_API_BASE_URL" "http://localhost:11434/v1"
+    Update-EnvVariable "OPENAI_API_KEY" "ollama"
+    $ollamaModel = Read-Host "Enter Ollama model name (default: llama3.1)"
+    if (-not $ollamaModel) { $ollamaModel = "llama3.1" }
+    Update-EnvVariable "OPENAI_MODEL_NAME" $ollamaModel
+    
+} elseif ($llmChoice -eq "3") {
+    # OpenAI
+    Write-Host "Configuring for OpenAI..." -ForegroundColor Cyan
+    Update-EnvVariable "LLM_PROVIDER" "OPENAI"
+    Update-EnvVariable "OPENAI_API_BASE_URL" "https://api.openai.com/v1"
+    $apiKey = Read-Host "Enter your OpenAI API Key"
+    Update-EnvVariable "OPENAI_API_KEY" $apiKey
+    Update-EnvVariable "OPENAI_MODEL_NAME" "gpt-4-turbo"
+
+} else {
+    # Gemini (Default)
+    Write-Host "Configuring for Gemini..." -ForegroundColor Cyan
+    Update-EnvVariable "LLM_PROVIDER" "GEMINI"
+    $geminiKey = Read-Host "Enter your Gemini API Key"
+    Update-EnvVariable "GEMINI_API_KEY" $geminiKey
+}
 Write-Host "==================================" -ForegroundColor Green
 Write-Host "✓ Configuration Complete!" -ForegroundColor Green
 Write-Host "==================================" -ForegroundColor Green

@@ -146,6 +146,7 @@ class OrpheusTTS(BaseTTS):
         def thread_worker():
             try:
                 buffer, count = [], 0
+                audio_accumulator = []
                 for token_text in self._generate_tokens_sync(text, opts):
                     if "<|error|>" in token_text: break
                     token_id = self._turn_token_into_id(token_text, count)
@@ -154,10 +155,21 @@ class OrpheusTTS(BaseTTS):
                         if count % 7 == 0 and len(buffer) >= 28:
                             audio_slice = self._snac_decode_sync(buffer)
                             if audio_slice is not None and audio_slice.size > 0:
-                                loop.call_soon_threadsafe(queue.put_nowait, (self.SAMPLE_RATE, audio_slice))
+                                audio_accumulator.append(audio_slice)
+                                # Buffer 5 chunks (approx 425ms) to prevent stuttering
+                                if len(audio_accumulator) >= 5:
+                                    combined_audio = np.concatenate(audio_accumulator)
+                                    loop.call_soon_threadsafe(queue.put_nowait, (self.SAMPLE_RATE, combined_audio))
+                                    audio_accumulator = []
             except Exception as e:
                 logger.error(f"Error in OrpheusTTS worker thread: {e}", exc_info=True)
             finally:
+                if audio_accumulator:
+                    try:
+                        combined_audio = np.concatenate(audio_accumulator)
+                        loop.call_soon_threadsafe(queue.put_nowait, (self.SAMPLE_RATE, combined_audio))
+                    except Exception as e:
+                        logger.error(f"Error flushing audio buffer: {e}")
                 loop.call_soon_threadsafe(queue.put_nowait, None)
 
         thread = threading.Thread(target=thread_worker, daemon=True)

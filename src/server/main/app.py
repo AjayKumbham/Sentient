@@ -70,6 +70,8 @@ if TTS_PROVIDER == "ORPHEUS":
     from main.voice.tts.orpheus import OrpheusTTS
 elif TTS_PROVIDER == "SMALLEST_AI":
     from main.voice.tts.smallest_ai import SmallestAITTS
+elif TTS_PROVIDER == "EDGE_TTS":
+    from main.voice.tts.edge import EdgeTTS
 else:
     OrpheusTTS = None
     SmallestAITTS = None
@@ -134,6 +136,8 @@ def initialize_tts():
             logger.error("SMALLEST_AI_API_KEY not set for TTS.")
         else:
             tts_model_instance = SmallestAITTS()
+    elif TTS_PROVIDER == "EDGE_TTS":
+        tts_model_instance = EdgeTTS()
     else:
         logger.warning(f"Invalid TTS_PROVIDER: '{TTS_PROVIDER}'. No TTS model loaded.")
 

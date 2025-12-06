@@ -7,7 +7,8 @@ Write-Host ""
 $dependencies = @(
     "faster-whisper",
     "snac",
-    "llama-cpp-python"
+    "llama-cpp-python",
+    "google-generativeai"
 )
 
 foreach ($dep in $dependencies) {
