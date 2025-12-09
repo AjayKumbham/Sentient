@@ -73,6 +73,8 @@ ORPHEUS_MODEL_PATH = os.getenv("ORPHEUS_MODEL_PATH")
 ORPHEUS_N_GPU_LAYERS = int(os.getenv("ORPHEUS_N_GPU_LAYERS", 0))
 HF_TOKEN = os.getenv("HF_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 
 # --- File Management ---
 FILE_MANAGEMENT_TEMP_DIR = os.getenv("FILE_MANAGEMENT_TEMP_DIR", "/tmp/sentient_files")

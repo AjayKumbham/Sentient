@@ -36,8 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import ENCODERS_BY_TYPE
 
 from main.config import (
-    APP_SERVER_PORT, STT_PROVIDER, TTS_PROVIDER, ELEVENLABS_API_KEY, DEEPGRAM_API_KEY,
-    FASTER_WHISPER_MODEL_SIZE, FASTER_WHISPER_DEVICE, FASTER_WHISPER_COMPUTE_TYPE, ORPHEUS_MODEL_PATH, SMALLEST_AI_API_KEY
+    APP_SERVER_PORT, AZURE_SPEECH_KEY, AZURE_SPEECH_REGION
 )
 from main.dependencies import mongo_manager
 from main.auth.routes import router as auth_router
@@ -52,29 +51,11 @@ from main.memories.db import close_db_pool as close_memories_pg_pool
 from main.memories.routes import router as memories_router
 from mcp_hub.memory.utils import initialize_embedding_model
 from main.files.routes import router as files_router
-# FIX: Import both router and stream from voice.routes
 from main.voice.routes import router as voice_router, stream as voice_stream
 from main.voice.stt.base import BaseSTT
-from main.voice.stt.elevenlabs import ElevenLabsSTT
-from main.voice.stt.deepgram import DeepgramSTT
+from main.voice.stt.azure import AzureSTT
 from main.voice.tts.base import BaseTTS
-from main.voice.tts.elevenlabs import ElevenLabsTTS as ElevenLabsTTSImpl
-
-# Conditionally import heavy voice models only if they are selected
-if STT_PROVIDER == "FASTER_WHISPER":
-    from main.voice.stt.faster_whisper import FasterWhisperSTT
-else:
-    FasterWhisperSTT = None
-
-if TTS_PROVIDER == "ORPHEUS":
-    from main.voice.tts.orpheus import OrpheusTTS
-elif TTS_PROVIDER == "SMALLEST_AI":
-    from main.voice.tts.smallest_ai import SmallestAITTS
-elif TTS_PROVIDER == "EDGE_TTS":
-    from main.voice.tts.edge import EdgeTTS
-else:
-    OrpheusTTS = None
-    SmallestAITTS = None
+from main.voice.tts.azure import AzureTTS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__) 
@@ -87,59 +68,36 @@ stt_model_instance: Optional[BaseSTT] = None
 tts_model_instance: Optional[BaseTTS] = None
 
 def initialize_stt():
+    """Initialize Azure Speech-to-Text"""
     global stt_model_instance
-    logger.info(f"Initializing STT model provider: {STT_PROVIDER}")
-    if STT_PROVIDER == "FASTER_WHISPER":
-        try:
-            if FasterWhisperSTT: # Check if the import was successful
-                stt_model_instance = FasterWhisperSTT(
-                    model_size=FASTER_WHISPER_MODEL_SIZE, device=FASTER_WHISPER_DEVICE,
-                    compute_type=FASTER_WHISPER_COMPUTE_TYPE
-                )
-            else:
-                logger.error("FasterWhisperSTT is configured but could not be imported. Check dependencies.")
-        except Exception as e:
-            logger.error(f"Failed to initialize FasterWhisper STT: {e}", exc_info=True)
-    elif STT_PROVIDER == "ELEVENLABS":
-        if not ELEVENLABS_API_KEY:
-            logger.error("ELEVENLABS_API_KEY not set for STT.")
-        else:
-            stt_model_instance = ElevenLabsSTT()
-    elif STT_PROVIDER == "DEEPGRAM":
-        if not DEEPGRAM_API_KEY:
-            logger.error("DEEPGRAM_API_KEY not set for STT.")
-        else:
-            stt_model_instance = DeepgramSTT()
-    else:
-        logger.warning(f"Invalid STT_PROVIDER: '{STT_PROVIDER}'. No STT model loaded.")
+    logger.info("Initializing Azure Speech-to-Text...")
+    
+    if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
+        logger.error("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION are required.")
+        logger.error("Please configure Azure Speech credentials in your .env file.")
+        return
+    
+    try:
+        stt_model_instance = AzureSTT()
+        logger.info("✓ Azure STT initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Azure STT: {e}", exc_info=True)
 
 def initialize_tts():
+    """Initialize Azure Text-to-Speech"""
     global tts_model_instance
-    logger.info(f"Initializing TTS model provider: {TTS_PROVIDER}")
-    if TTS_PROVIDER == "ORPHEUS":
-        try:
-            if OrpheusTTS:
-                tts_model_instance = OrpheusTTS(
-                    model_path=ORPHEUS_MODEL_PATH
-                )
-            else:
-                logger.error("OrpheusTTS is configured but could not be imported. Check dependencies.")
-        except Exception as e:
-            logger.error(f"Failed to initialize OrpheusTTS: {e}", exc_info=True)
-    elif TTS_PROVIDER == "ELEVENLABS":
-        if not ELEVENLABS_API_KEY:
-            logger.error("ELEVENLABS_API_KEY not set for TTS.")
-        else:
-            tts_model_instance = ElevenLabsTTSImpl()
-    elif TTS_PROVIDER == "SMALLEST_AI":
-        if not SMALLEST_AI_API_KEY:
-            logger.error("SMALLEST_AI_API_KEY not set for TTS.")
-        else:
-            tts_model_instance = SmallestAITTS()
-    elif TTS_PROVIDER == "EDGE_TTS":
-        tts_model_instance = EdgeTTS()
-    else:
-        logger.warning(f"Invalid TTS_PROVIDER: '{TTS_PROVIDER}'. No TTS model loaded.")
+    logger.info("Initializing Azure Text-to-Speech...")
+    
+    if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
+        logger.error("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION are required.")
+        logger.error("Please configure Azure Speech credentials in your .env file.")
+        return
+    
+    try:
+        tts_model_instance = AzureTTS()
+        logger.info("✓ Azure TTS initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Azure TTS: {e}", exc_info=True)
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
