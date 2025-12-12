@@ -7,10 +7,14 @@ from typing import Dict
 from fastmcp.utilities.logging import get_logger
 from .constants import TOPICS
 
-# Load .env file for 'dev-local' environment.
+# Load .env file based on environment
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'dev-local')
 if ENVIRONMENT == 'dev-local':
     dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+    if os.path.exists(dotenv_path):
+        load_dotenv(dotenv_path=dotenv_path)
+elif ENVIRONMENT == 'selfhost':
+    dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env.selfhost')
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path=dotenv_path)
 

@@ -1,0 +1,105 @@
+# Complete Docker Compose with Databases and Application
+# This runs everything: databases + app + MCP servers
+
+services:
+  # ===== DATABASES =====
+  
+  # MongoDB for main application data
+  mongodb:
+    image: mongo:7.0
+    container_name: sentient-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: sentient_db
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - sentient_network
+    ports:
+      - "27017:27017"
+
+  # PostgreSQL with pgvector for MCP memory storage
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: sentient-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentient
+      POSTGRES_PASSWORD: sentient_dev_password
+      POSTGRES_DB: mcp_memory
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sentient_network
+    ports:
+      - "5432:5432"
+
+  # Redis for Celery task queue
+  redis:
+    image: redis:7-alpine
+    container_name: sentient-redis
+    restart: unless-stopped
+    networks:
+      - sentient_network
+    ports:
+      - "6379:6379"
+
+  # ===== APPLICATION =====
+  
+  # Main Sentient Application (FastAPI, Nginx, Celery, MCPs)
+  sentient-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME}
+    container_name: sentient-app
+    restart: unless-stopped
+    env_file:
+      - ./.env.selfhost
+    environment:
+      # Override database URLs to use Docker service names
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=sentient
+      - POSTGRES_PASSWORD=sentient_dev_password
+      - POSTGRES_DB=mcp_memory
+      - MONGO_URI=mongodb://mongodb:27017/
+      - MONGO_DB_NAME=sentient_selfhost_db
+      - MONGODB_URI=mongodb://mongodb:27017/sentient_selfhost_db
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_DB=sentient_selfhost_db
+    ports:
+      - "5000:80"  # Nginx port
+    depends_on:
+      - mongodb
+      - postgres
+      - redis
+      - litellm
+    networks:
+      - sentient_network
+
+  # LiteLLM Proxy for Gemini Models
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-proxy
+    restart: unless-stopped
+    networks:
+      - sentient_network
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file:
+      - ./.env.selfhost
+
+networks:
+  sentient_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  postgres_data:

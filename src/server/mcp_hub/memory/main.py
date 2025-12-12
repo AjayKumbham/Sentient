@@ -52,6 +52,7 @@ async def lifespan(app):
     await db.close_db_pool()
     logger.info("Memory MCP shutdown complete.")
 
+
 mcp = FastMCP(
     name="MemoryServer",
     instructions="Provides tools to manage a user's long-term, structured memory, enabling the agent to learn, recall, and forget information about the user.",
@@ -122,4 +123,5 @@ if __name__ == "__main__":
     port = int(os.getenv("MCP_SERVER_PORT", 8001))
 
     logger.info(f"Starting Memory MCP Server on http://{host}:{port}")
+    # Run without SSE-level authentication (auth happens at tool level via get_user_id_from_context)
     mcp.run(transport="sse", host=host, port=port)

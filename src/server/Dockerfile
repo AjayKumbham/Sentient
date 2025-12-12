@@ -24,10 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unrtf \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
+# Install uv - ultra-fast Python package installer
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy and install Python dependencies using uv (10-100x faster than pip)
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
 # --- Build Arguments ---
 ARG OPENAI_API_KEY
